@@ -22,8 +22,12 @@ The script is intentionally **zero third-party dependency** so it can run immedi
 
 - `raspberry_ingester.py`  
   Main ingestion service.
+- `macbook_raspi_bridge.py`  
+  Communication bridge script between MacBook/iOS command source and Raspberry Pi datastore.
 - `tests/test_raspberry_ingester.py`  
   Focused unit tests for sentiment parsing, symbol parsing, schema creation, and Yahoo parsing.
+- `tests/test_macbook_raspi_bridge.py`  
+  Focused unit tests for iMessage command parsing and bridge response generation.
 
 ---
 
@@ -159,6 +163,51 @@ Arguments:
 - `--max-sec-filings` max recent filings per symbol per cycle
 - `--once` run once and exit
 - `--log-level` logging level
+
+---
+
+## MacBook/iOS ↔ Raspberry Pi Communication Script
+
+The communication bridge is in `macbook_raspi_bridge.py`.
+
+### Raspberry Pi side (server)
+
+Run this on the Raspberry Pi to expose an authenticated endpoint that reads from the local SQLite data ingested by `raspberry_ingester.py`:
+
+```bash
+export BRIDGE_TOKEN="replace_with_long_random_token"
+python3 macbook_raspi_bridge.py serve-pi --host 0.0.0.0 --port 8787 --db-path /home/pi/stockchecker_data.db
+```
+
+HTTP endpoints:
+
+- `GET /health`
+- `POST /command` (requires header `X-Bridge-Token`)
+
+Example command JSON payload:
+
+```json
+{"text":"Analyze $NVDA","sender":"ios"}
+```
+
+Supported commands:
+
+- `Analyze $TICKER`
+- `Price $TICKER`
+- `News $TICKER`
+- `Sentiment $TICKER`
+- `Help`
+
+### MacBook/BlueBubbles side (client forwarder)
+
+Use this on the MacBook side to forward parsed iMessage text to the Raspberry Pi:
+
+```bash
+export BRIDGE_TOKEN="replace_with_same_token_used_on_pi"
+python3 macbook_raspi_bridge.py send-mac --pi-url http://raspberrypi.local:8787 --text "Analyze $NVDA" --sender "ios"
+```
+
+The script prints JSON containing `response_text`, which can be sent back through your BlueBubbles/iMessage responder flow.
 
 ---
 
