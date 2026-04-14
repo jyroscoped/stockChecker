@@ -433,7 +433,10 @@ class IngestionClient:
         row = index.get(ticker.upper())
         if not row:
             return []
-        cik_number = int(row.get("cik_str"))
+        cik_raw = row.get("cik_str")
+        if cik_raw is None:
+            return []
+        cik_number = int(cik_raw)
         cik = str(cik_number).zfill(10)
         endpoint = f"https://data.sec.gov/submissions/CIK{cik}.json"
         payload = self.fetch_json(endpoint, headers=DEFAULT_HEADERS)
