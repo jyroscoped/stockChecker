@@ -20,7 +20,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Tuple
 
 
-TICKER_PATTERN = re.compile(r"\$([A-Za-z][A-Za-z0-9\.-]{0,9})")
+TICKER_SYMBOL_PATTERN = re.compile(r"\$([A-Za-z][A-Za-z0-9\.-]{0,9})")
+MAX_REQUEST_BODY_SIZE = 10_000
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 20
 
 
 @dataclass(frozen=True)
@@ -31,7 +33,7 @@ class ParsedCommand:
 
 def parse_imessage_command(text: str) -> ParsedCommand:
     lower = text.strip().lower()
-    symbol_match = TICKER_PATTERN.search(text)
+    symbol_match = TICKER_SYMBOL_PATTERN.search(text)
     symbol = symbol_match.group(1).upper() if symbol_match else None
 
     if lower.startswith("analyze"):
@@ -160,7 +162,7 @@ class PiBridgeHandler(BaseHTTPRequestHandler):
 
     def _read_json(self) -> Dict[str, Any]:
         content_len = int(self.headers.get("Content-Length", "0"))
-        if content_len <= 0 or content_len > 10000:
+        if content_len <= 0 or content_len > MAX_REQUEST_BODY_SIZE:
             return {}
         raw = self.rfile.read(content_len)
         try:
@@ -228,7 +230,13 @@ def run_pi_server(host: str, port: int, db_path: str, token: str) -> int:
     return 0
 
 
-def send_command_to_pi(pi_url: str, token: str, text: str, sender: str, timeout: int = 20) -> Dict[str, Any]:
+def send_command_to_pi(
+    pi_url: str,
+    token: str,
+    text: str,
+    sender: str,
+    timeout: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+) -> Dict[str, Any]:
     if not token:
         raise ValueError("token is required")
 
@@ -244,7 +252,11 @@ def send_command_to_pi(pi_url: str, token: str, text: str, sender: str, timeout:
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+        raw = response.read().decode("utf-8")
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Pi bridge returned invalid JSON: {raw[:200]}") from exc
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -262,7 +274,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     send.add_argument("--token", default=os.environ.get("BRIDGE_TOKEN", ""))
     send.add_argument("--text", required=True)
     send.add_argument("--sender", default="ios")
-    send.add_argument("--timeout", type=int, default=20)
+    send.add_argument("--timeout", type=int, default=DEFAULT_REQUEST_TIMEOUT_SECONDS)
 
     return parser
 
