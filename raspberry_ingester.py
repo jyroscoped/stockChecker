@@ -53,7 +53,6 @@ class SentimentAnalyzer:
         "profit",
         "profits",
         "outperform",
-        "momentum",
     }
     NEGATIVE = {
         "miss",

@@ -20,9 +20,9 @@ The script is intentionally **zero third-party dependency** so it can run immedi
 
 ## File Overview
 
-- `/home/runner/work/stockChecker/stockChecker/raspberry_ingester.py`  
+- `raspberry_ingester.py`  
   Main ingestion service.
-- `/home/runner/work/stockChecker/stockChecker/tests/test_raspberry_ingester.py`  
+- `tests/test_raspberry_ingester.py`  
   Focused unit tests for sentiment parsing, symbol parsing, schema creation, and Yahoo parsing.
 
 ---
@@ -90,7 +90,7 @@ Data is inserted with uniqueness constraints to avoid duplicate rows.
 
 ## Quick Start (Raspberry Pi)
 
-## 0. Confirm Python
+### 0) Confirm Python
 
 ```bash
 python3 --version
@@ -98,17 +98,17 @@ python3 --version
 
 Python 3.9+ recommended.
 
-## 1. Run one ingestion cycle
+### 1) Run one ingestion cycle
 
 ```bash
-cd /home/runner/work/stockChecker/stockChecker
+cd /path/to/stockChecker
 python3 raspberry_ingester.py --once --symbols AAPL,MSFT,NVDA --db-path ./stockchecker_data.db
 ```
 
-## 2. Run continuously (always-on)
+### 2) Run continuously (always-on)
 
 ```bash
-cd /home/runner/work/stockChecker/stockChecker
+cd /path/to/stockChecker
 python3 raspberry_ingester.py --symbols AAPL,MSFT,NVDA,SPY --db-path ./stockchecker_data.db --interval-seconds 900
 ```
 
@@ -191,7 +191,7 @@ Raw payload snapshots for auditability/debugging.
 This project currently uses built-in `unittest` for the ingestion script tests.
 
 ```bash
-cd /home/runner/work/stockChecker/stockChecker
+cd /path/to/stockChecker
 python3 -m unittest discover -s tests -v
 ```
 
