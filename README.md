@@ -176,6 +176,7 @@ Run this on the Raspberry Pi to expose an authenticated endpoint that reads from
 
 ```bash
 export BRIDGE_TOKEN="replace_with_long_random_token"
+export BRIDGE_ALLOWED_SENDERS="goldbergerkids@icloud.com"
 python3 macbook_raspi_bridge.py serve-pi --host 0.0.0.0 --port 8787 --db-path /home/pi/stockchecker_data.db
 ```
 
@@ -187,7 +188,7 @@ HTTP endpoints:
 Example command JSON payload:
 
 ```json
-{"text":"Analyze $NVDA","sender":"ios"}
+{"text":"Analyze $NVDA","sender":"goldbergerkids@icloud.com"}
 ```
 
 Supported commands:
@@ -196,6 +197,8 @@ Supported commands:
 - `Price $TICKER`
 - `News $TICKER`
 - `Sentiment $TICKER`
+- `Filings $TICKER`
+- `Updates $TICKER` (price + sentiment + headlines + recent SEC filings)
 - `Help`
 
 ### MacBook/BlueBubbles side (client forwarder)
@@ -204,10 +207,11 @@ Use this on the MacBook side to forward parsed iMessage text to the Raspberry Pi
 
 ```bash
 export BRIDGE_TOKEN="replace_with_same_token_used_on_pi"
-python3 macbook_raspi_bridge.py send-mac --pi-url http://raspberrypi.local:8787 --text "Analyze $NVDA" --sender "ios"
+python3 macbook_raspi_bridge.py send-mac --pi-url http://raspberrypi.local:8787 --text "Analyze $NVDA" --sender "goldbergerkids@icloud.com"
 ```
 
 The script prints JSON containing `response_text`, which can be sent back through your BlueBubbles/iMessage responder flow.
+Only configured allowed sender IDs are accepted by the Pi bridge.
 
 ---
 

@@ -17,12 +17,13 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Set, Tuple
 
 
 TICKER_SYMBOL_PATTERN = re.compile(r"\$([A-Za-z][A-Za-z0-9\.-]{0,9})")
 MAX_REQUEST_BODY_SIZE = 10_000
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 20
+DEFAULT_ALLOWED_SENDER = "goldbergerkids@icloud.com"
 
 
 @dataclass(frozen=True)
@@ -44,9 +45,26 @@ def parse_imessage_command(text: str) -> ParsedCommand:
         return ParsedCommand("news", symbol)
     if lower.startswith("sentiment"):
         return ParsedCommand("sentiment", symbol)
+    if lower.startswith("updates"):
+        return ParsedCommand("updates", symbol)
+    if lower.startswith("filings"):
+        return ParsedCommand("filings", symbol)
     if lower.startswith("help"):
         return ParsedCommand("help", symbol)
     return ParsedCommand("unknown", symbol)
+
+
+def _normalize_sender(value: str) -> str:
+    return value.strip().lower()
+
+
+def parse_allowed_senders(raw: str) -> Set[str]:
+    parsed = {_normalize_sender(item) for item in raw.split(",") if item.strip()}
+    return parsed or {_normalize_sender(DEFAULT_ALLOWED_SENDER)}
+
+
+def is_sender_allowed(sender: str, allowed_senders: Set[str]) -> bool:
+    return _normalize_sender(sender) in allowed_senders
 
 
 class PiBridgeService:
@@ -110,18 +128,48 @@ class PiBridgeService:
         )
         return [str(r[0]) for r in rows]
 
+    def get_recent_sec_filings(self, symbol: str, limit: int = 3) -> list[Tuple[str, str, str]]:
+        rows = self._query_many(
+            """
+            SELECT form, COALESCE(filed_at, ''), COALESCE(url, '')
+            FROM sec_filings
+            WHERE UPPER(ticker) = ?
+            ORDER BY COALESCE(filed_at, '') DESC, id DESC
+            LIMIT ?
+            """,
+            (symbol.upper(), limit),
+        )
+        return [(str(r[0]), str(r[1]), str(r[2])) for r in rows]
+
+    def _build_analysis_text(self, symbol: str, close: float, timestamp: str, provider: str) -> str:
+        sentiment = self.get_sentiment(symbol)
+        sentiment_text = "n/a" if sentiment is None else f"{sentiment:.3f}"
+        headlines = self.get_latest_headlines(symbol)
+        headline_text = " | ".join(headlines) if headlines else "No recent headlines"
+        filings = self.get_recent_sec_filings(symbol)
+        filing_text = (
+            " | ".join([f"{form} ({filed_at}) {url}".strip() for form, filed_at, url in filings])
+            if filings
+            else "No recent SEC filings"
+        )
+        return (
+            f"Analysis for {symbol}: latest close={close:.2f} ({provider}) at {timestamp}; "
+            f"avg news sentiment={sentiment_text}; headlines={headline_text}; sec_filings={filing_text}"
+        )
+
     def build_response(self, text: str) -> str:
         parsed = parse_imessage_command(text)
         if parsed.action == "help":
             return (
-                "Commands: Analyze $TICKER, Price $TICKER, News $TICKER, Sentiment $TICKER"
+                "Commands: Analyze $TICKER, Price $TICKER, News $TICKER, "
+                "Sentiment $TICKER, Filings $TICKER, Updates $TICKER"
             )
 
         if not parsed.symbol:
             return "No ticker found. Try: Analyze $NVDA"
 
         symbol = parsed.symbol
-        if parsed.action in {"analyze", "price"}:
+        if parsed.action in {"analyze", "price", "updates"}:
             latest = self.get_latest_price(symbol)
             if not latest:
                 return f"No price data available yet for {symbol}."
@@ -132,14 +180,7 @@ class PiBridgeService:
                     f"(provider={provider}, timestamp={timestamp})"
                 )
 
-            sentiment = self.get_sentiment(symbol)
-            sentiment_text = "n/a" if sentiment is None else f"{sentiment:.3f}"
-            headlines = self.get_latest_headlines(symbol)
-            headline_text = " | ".join(headlines) if headlines else "No recent headlines"
-            return (
-                f"Analysis for {symbol}: latest close={close:.2f} ({provider}) at {timestamp}; "
-                f"avg news sentiment={sentiment_text}; headlines={headline_text}"
-            )
+            return self._build_analysis_text(symbol, close, timestamp, provider)
 
         if parsed.action == "news":
             headlines = self.get_latest_headlines(symbol)
@@ -153,12 +194,20 @@ class PiBridgeService:
                 return f"No sentiment data available yet for {symbol}."
             return f"{symbol} average news sentiment: {sentiment:.3f}"
 
+        if parsed.action == "filings":
+            filings = self.get_recent_sec_filings(symbol)
+            if not filings:
+                return f"No SEC filing data available yet for {symbol}."
+            filing_text = " | ".join([f"{form} ({filed_at}) {url}".strip() for form, filed_at, url in filings])
+            return f"Latest {symbol} SEC filings: {filing_text}"
+
         return "Unknown command. Use Help for supported commands."
 
 
 class PiBridgeHandler(BaseHTTPRequestHandler):
     service: PiBridgeService
     token: str
+    allowed_senders: Set[str]
 
     def _read_json(self) -> Dict[str, Any]:
         content_len = int(self.headers.get("Content-Length", "0"))
@@ -199,6 +248,9 @@ class PiBridgeHandler(BaseHTTPRequestHandler):
         payload = self._read_json()
         text = str(payload.get("text", "")).strip()
         sender = str(payload.get("sender", "unknown")).strip()
+        if not is_sender_allowed(sender, self.allowed_senders):
+            self._send_json(403, {"error": "forbidden sender"})
+            return
         if not text:
             self._send_json(400, {"error": "missing text"})
             return
@@ -218,12 +270,13 @@ class PiBridgeHandler(BaseHTTPRequestHandler):
         return
 
 
-def run_pi_server(host: str, port: int, db_path: str, token: str) -> int:
+def run_pi_server(host: str, port: int, db_path: str, token: str, allowed_senders: Set[str]) -> int:
     if not token:
         raise SystemExit("BRIDGE_TOKEN or --token is required for serve-pi")
 
     PiBridgeHandler.service = PiBridgeService(db_path)
     PiBridgeHandler.token = token
+    PiBridgeHandler.allowed_senders = allowed_senders
     server = ThreadingHTTPServer((host, port), PiBridgeHandler)
     print(f"Pi bridge listening on http://{host}:{port} (db={db_path})")
     server.serve_forever()
@@ -268,12 +321,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=8787)
     serve.add_argument("--db-path", default=os.environ.get("DB_PATH", "/home/pi/stockchecker_data.db"))
     serve.add_argument("--token", default=os.environ.get("BRIDGE_TOKEN", ""))
+    serve.add_argument(
+        "--allowed-senders",
+        default=os.environ.get("BRIDGE_ALLOWED_SENDERS", DEFAULT_ALLOWED_SENDER),
+        help="Comma-separated sender IDs allowed to issue commands",
+    )
 
     send = sub.add_parser("send-mac", help="Forward command from MacBook/iOS bridge to Pi")
     send.add_argument("--pi-url", default=os.environ.get("PI_BRIDGE_URL", "http://raspberrypi.local:8787"))
     send.add_argument("--token", default=os.environ.get("BRIDGE_TOKEN", ""))
     send.add_argument("--text", required=True)
-    send.add_argument("--sender", default="ios")
+    send.add_argument("--sender", default=DEFAULT_ALLOWED_SENDER)
     send.add_argument("--timeout", type=int, default=DEFAULT_REQUEST_TIMEOUT_SECONDS)
 
     return parser
@@ -284,7 +342,13 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.mode == "serve-pi":
-        return run_pi_server(args.host, args.port, args.db_path, args.token)
+        return run_pi_server(
+            args.host,
+            args.port,
+            args.db_path,
+            args.token,
+            parse_allowed_senders(args.allowed_senders),
+        )
 
     if args.mode == "send-mac":
         try:
