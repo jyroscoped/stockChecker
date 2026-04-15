@@ -276,7 +276,7 @@ def format_network_error(exc: urllib.error.URLError, pi_url: str) -> str:
             f"Network error: Could not resolve host for {command_url}. "
             "Use the Pi IP address if local hostname resolution fails."
         )
-    if isinstance(reason, TimeoutError) or isinstance(reason, socket.timeout):
+    if isinstance(reason, (TimeoutError, socket.timeout)):
         return (
             f"Network error: Request to {command_url} timed out. "
             "Confirm the Pi bridge server is running and reachable."
