@@ -163,6 +163,35 @@ class BridgeServiceTests(unittest.TestCase):
             self.assertIn("Bridge database error:", output)
             self.assertIn("Verify --db-path", output)
 
+    def test_sentiment_label_uses_neutral_band_for_small_values(self):
+        self.assertEqual(PiBridgeService._sentiment_label(0.05), "neutral (0.050)")
+        self.assertEqual(PiBridgeService._sentiment_label(-0.05), "neutral (-0.050)")
+
+    def test_get_sentiment_uses_recent_trimmed_average(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            db_path = os.path.join(tmp_dir, "bridge.db")
+            store = DataStore(db_path)
+            scores = [0.3, 0.3, 0.3, 0.3, 0.3, -1.0, 1.0]
+            items = []
+            for index, score in enumerate(scores):
+                items.append(
+                    {
+                        "source": "yahoo_finance_rss",
+                        "symbol": "NVDA",
+                        "title": f"headline-{index}",
+                        "url": f"https://example.com/nvda/{index}",
+                        "published_at": f"2026-04-{index + 1:02d}",
+                        "summary": "summary",
+                        "sentiment_score": score,
+                    }
+                )
+            store.insert_news_items(items)
+
+            service = PiBridgeService(db_path)
+            sentiment = service.get_sentiment("NVDA")
+            self.assertIsNotNone(sentiment)
+            self.assertAlmostEqual(sentiment, 0.3, places=3)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -16,6 +16,7 @@ import datetime as dt
 import json
 import logging
 import os
+import re
 import sqlite3
 import time
 import urllib.error
@@ -39,6 +40,7 @@ class SentimentAnalyzer:
     POSITIVE = {
         "beat",
         "beats",
+        "beating",
         "bull",
         "bullish",
         "gain",
@@ -50,13 +52,19 @@ class SentimentAnalyzer:
         "upside",
         "record",
         "surge",
+        "surges",
         "profit",
         "profits",
         "outperform",
+        "rebound",
+        "improve",
+        "improves",
+        "improved",
     }
     NEGATIVE = {
         "miss",
         "misses",
+        "missing",
         "bear",
         "bearish",
         "loss",
@@ -73,17 +81,68 @@ class SentimentAnalyzer:
         "warning",
         "underperform",
         "bankrupt",
+        "cut",
+        "cuts",
+        "fall",
+        "falls",
+        "plunge",
+        "plunges",
+        "concern",
+        "concerns",
+        "investigation",
+    }
+    NEGATIONS = {"no", "not", "never", "none", "without", "hardly", "isnt", "isn't", "wasnt", "wasn't"}
+    WORD_WEIGHTS = {
+        # promotional terms are down-weighted to reduce bullish bias in headlines
+        "buy": 0.6,
+        "bull": 0.7,
+        "bullish": 0.7,
+        "strong": 0.75,
+        "growth": 0.75,
+        "upgrade": 0.8,
+        "risk": 1.15,
+        "fraud": 1.35,
+        "lawsuit": 1.2,
+        "bankrupt": 1.4,
+        "investigation": 1.25,
     }
 
     @classmethod
     def score_text(cls, text: str) -> float:
-        words = [w.strip(".,!?;:\"'()[]{}") for w in text.lower().split()]
-        pos = sum(1 for w in words if w in cls.POSITIVE)
-        neg = sum(1 for w in words if w in cls.NEGATIVE)
-        total = pos + neg
-        if total == 0:
+        tokens = re.findall(r"[a-zA-Z']+", text.lower())
+        if not tokens:
             return 0.0
-        return round((pos - neg) / total, 4)
+
+        weighted_score = 0.0
+        weighted_hits = 0.0
+        negation_scope = 0
+        for token in tokens:
+            if token in cls.NEGATIONS:
+                negation_scope = 3
+                continue
+
+            direction = 0.0
+            if token in cls.POSITIVE:
+                direction = 1.0
+            elif token in cls.NEGATIVE:
+                direction = -1.0
+
+            if direction != 0.0:
+                if negation_scope > 0:
+                    direction *= -1.0
+                weight = cls.WORD_WEIGHTS.get(token, 1.0)
+                weighted_score += direction * weight
+                weighted_hits += weight
+
+            if negation_scope > 0:
+                negation_scope -= 1
+
+        if weighted_hits == 0:
+            return 0.0
+
+        normalized = weighted_score / weighted_hits
+        normalized = max(-1.0, min(1.0, normalized))
+        return round(normalized, 4)
 
 
 @dataclass

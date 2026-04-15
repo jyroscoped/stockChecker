@@ -102,18 +102,44 @@ class PiBridgeService:
             return None
         return float(row[0]), str(row[1]), str(row[2])
 
-    def get_sentiment(self, symbol: str) -> Optional[float]:
-        row = self._query_one(
-            """
-            SELECT AVG(sentiment_score)
-            FROM news_items
+    def _get_trimmed_recent_average(
+        self,
+        table_name: str,
+        symbol: str,
+        time_column: str,
+        limit: int = 40,
+    ) -> Optional[float]:
+        if table_name not in {"news_items", "social_posts"}:
+            raise ValueError(f"unsupported sentiment source: {table_name}")
+        if time_column not in {"published_at", "posted_at"}:
+            raise ValueError(f"unsupported sentiment time column: {time_column}")
+        rows = self._query_many(
+            f"""
+            SELECT sentiment_score
+            FROM {table_name}
             WHERE symbol = ? AND sentiment_score IS NOT NULL
+            ORDER BY COALESCE({time_column}, '') DESC, id DESC
+            LIMIT ?
             """,
-            (symbol.upper(),),
+            (symbol.upper(), limit),
         )
-        if not row or row[0] is None:
+        scores = [float(row[0]) for row in rows if row and row[0] is not None]
+        if not scores:
             return None
-        return float(row[0])
+        scores.sort()
+        trim = int(len(scores) * 0.15)
+        if len(scores) >= 7 and trim > 0:
+            scores = scores[trim : len(scores) - trim]
+        if not scores:
+            return None
+        return sum(scores) / len(scores)
+
+    def get_sentiment(self, symbol: str) -> Optional[float]:
+        return self._get_trimmed_recent_average(
+            table_name="news_items",
+            symbol=symbol,
+            time_column="published_at",
+        )
 
     def get_latest_headlines(self, symbol: str, limit: int = 3) -> list[str]:
         rows = self._query_many(
@@ -129,17 +155,11 @@ class PiBridgeService:
         return [str(r[0]) for r in rows]
 
     def get_social_sentiment(self, symbol: str) -> Optional[float]:
-        row = self._query_one(
-            """
-            SELECT AVG(sentiment_score)
-            FROM social_posts
-            WHERE symbol = ? AND sentiment_score IS NOT NULL
-            """,
-            (symbol.upper(),),
+        return self._get_trimmed_recent_average(
+            table_name="social_posts",
+            symbol=symbol,
+            time_column="posted_at",
         )
-        if not row or row[0] is None:
-            return None
-        return float(row[0])
 
     def get_latest_two_closes(self, symbol: str) -> list[float]:
         rows = self._query_many(
@@ -223,9 +243,9 @@ class PiBridgeService:
     def _sentiment_label(score: Optional[float]) -> str:
         if score is None:
             return "n/a"
-        if score > 0:
+        if score >= 0.15:
             return f"bullish ({score:.3f})"
-        if score < 0:
+        if score <= -0.15:
             return f"bearish ({score:.3f})"
         return f"neutral ({score:.3f})"
 

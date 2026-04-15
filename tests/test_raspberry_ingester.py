@@ -14,6 +14,10 @@ class SentimentAnalyzerTests(unittest.TestCase):
         score = SentimentAnalyzer.score_text("Bearish decline and weak momentum")
         self.assertLess(score, 0)
 
+    def test_score_text_negation_flips_polarity(self):
+        score = SentimentAnalyzer.score_text("Outlook is not strong and not bullish")
+        self.assertLess(score, 0)
+
 
 class ParseSymbolTests(unittest.TestCase):
     def test_parse_symbols_trims_and_uppercases(self):
