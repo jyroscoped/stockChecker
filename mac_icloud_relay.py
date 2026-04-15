@@ -17,6 +17,11 @@ from macbook_raspi_bridge import DEFAULT_REQUEST_TIMEOUT_SECONDS, send_command_t
 
 DEFAULT_MESSAGES_DB_PATH = "~/Library/Messages/chat.db"
 DEFAULT_PI_BRIDGE_URL = "http://raspberrypi.local:8787"
+SUPPORTED_COMMAND_PREFIXES = ("analyze", "price", "news", "sentiment", "help")
+
+
+def _is_supported_command(text: str) -> bool:
+    return text.strip().lower().startswith(SUPPORTED_COMMAND_PREFIXES)
 
 
 def _normalized_messages_db_path(path: str) -> str:
@@ -89,16 +94,22 @@ def _fetch_new_incoming_texts(
         JOIN chat ON cmj.chat_id = chat.ROWID
         WHERE chat.chat_identifier = ?
           AND message.ROWID > ?
-          AND message.is_from_me = 0
         ORDER BY message.ROWID ASC
         """,
         (icloud_sender, min_rowid_exclusive),
     ).fetchall()
 
-    return [
-        (int(row[0]), str(row[1]).strip())
-        for row in rows
-    ]
+    filtered_rows: list[tuple[int, str]] = []
+    for row in rows:
+        rowid = int(row[0])
+        text = str(row[1]).strip()
+        is_from_me = int(row[2]) == 1
+        if not text:
+            continue
+        if is_from_me and not _is_supported_command(text):
+            continue
+        filtered_rows.append((rowid, text))
+    return filtered_rows
 
 
 def _build_parser() -> argparse.ArgumentParser:
