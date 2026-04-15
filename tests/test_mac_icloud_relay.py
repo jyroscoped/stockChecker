@@ -33,6 +33,10 @@ class MacIcloudRelayTests(unittest.TestCase):
             (13, "hello there", 0),
         )
         conn.execute(
+            "INSERT INTO message (ROWID, text, is_from_me) VALUES (?, ?, ?)",
+            (14, "just checking in", 1),
+        )
+        conn.execute(
             "INSERT INTO chat_message_join (chat_id, message_id) VALUES (?, ?)",
             (1, 10),
         )
@@ -48,6 +52,10 @@ class MacIcloudRelayTests(unittest.TestCase):
             "INSERT INTO chat_message_join (chat_id, message_id) VALUES (?, ?)",
             (1, 13),
         )
+        conn.execute(
+            "INSERT INTO chat_message_join (chat_id, message_id) VALUES (?, ?)",
+            (1, 14),
+        )
         return conn
 
     def test_fetch_new_incoming_texts_includes_supported_self_commands(self):
@@ -57,6 +65,8 @@ class MacIcloudRelayTests(unittest.TestCase):
         finally:
             conn.close()
         self.assertEqual(rows, [(10, "Analyze $NVDA"), (12, "analyze $AAPL"), (13, "hello there")])
+        self.assertNotIn((11, "Unknown command. Use Help for supported commands."), rows)
+        self.assertNotIn((14, "just checking in"), rows)
 
     def test_fetch_new_incoming_texts_respects_min_rowid(self):
         conn = self._make_conn_with_messages()

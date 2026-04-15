@@ -99,14 +99,17 @@ def _fetch_new_incoming_texts(
         (icloud_sender, min_rowid_exclusive),
     ).fetchall()
 
-    return [
-        (int(row[0]), str(row[1]).strip())
-        for row in rows
-        if (
-            str(row[1]).strip()
-            and (int(row[2]) == 0 or _is_supported_command(str(row[1])))
-        )
-    ]
+    filtered_rows: list[tuple[int, str]] = []
+    for row in rows:
+        rowid = int(row[0])
+        text = str(row[1]).strip()
+        is_from_me = int(row[2]) == 1
+        if not text:
+            continue
+        if is_from_me and not _is_supported_command(text):
+            continue
+        filtered_rows.append((rowid, text))
+    return filtered_rows
 
 
 def _build_parser() -> argparse.ArgumentParser:
