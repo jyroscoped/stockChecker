@@ -89,6 +89,7 @@ def _fetch_new_incoming_texts(
         JOIN chat ON cmj.chat_id = chat.ROWID
         WHERE chat.chat_identifier = ?
           AND message.ROWID > ?
+          AND message.is_from_me = 0
         ORDER BY message.ROWID ASC
         """,
         (icloud_sender, min_rowid_exclusive),
