@@ -23,6 +23,7 @@ from typing import Any, Dict, Optional, Tuple
 TICKER_SYMBOL_PATTERN = re.compile(r"\$([A-Za-z][A-Za-z0-9\.-]{0,9})")
 MAX_REQUEST_BODY_SIZE = 10_000
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 20
+CORE_PRELOADED_SYMBOLS = {"NVDA", "AAPL", "SPY", "VOO", "MSFT"}
 
 
 @dataclass(frozen=True)
@@ -127,6 +128,107 @@ class PiBridgeService:
         )
         return [str(r[0]) for r in rows]
 
+    def get_social_sentiment(self, symbol: str) -> Optional[float]:
+        row = self._query_one(
+            """
+            SELECT AVG(sentiment_score)
+            FROM social_posts
+            WHERE symbol = ? AND sentiment_score IS NOT NULL
+            """,
+            (symbol.upper(),),
+        )
+        if not row or row[0] is None:
+            return None
+        return float(row[0])
+
+    def get_latest_two_closes(self, symbol: str) -> list[float]:
+        rows = self._query_many(
+            """
+            SELECT close
+            FROM price_bars
+            WHERE symbol = ? AND close IS NOT NULL
+            ORDER BY timestamp DESC
+            LIMIT 2
+            """,
+            (symbol.upper(),),
+        )
+        return [float(r[0]) for r in rows if r and r[0] is not None]
+
+    def get_latest_sec_filing(self, symbol: str) -> Optional[Tuple[str, str]]:
+        row = self._query_one(
+            """
+            SELECT form, COALESCE(filed_at, '')
+            FROM sec_filings
+            WHERE ticker = ?
+            ORDER BY COALESCE(filed_at, '') DESC, id DESC
+            LIMIT 1
+            """,
+            (symbol.upper(),),
+        )
+        if not row:
+            return None
+        return str(row[0]), str(row[1])
+
+    def _ingest_symbol_on_demand(self, symbol: str) -> Dict[str, Any]:
+        from raspberry_ingester import DataStore, IngestionClient
+
+        result: Dict[str, Any] = {
+            "triggered": True,
+            "price_bars": 0,
+            "news_items": 0,
+            "social_posts": 0,
+            "sec_filings": 0,
+            "notes": [],
+        }
+
+        store = DataStore(self.db_path)
+        client = IngestionClient(timeout_seconds=20)
+        try:
+            try:
+                bars = client.fetch_yahoo_bars(symbol)
+                store.insert_price_bars(bars)
+                result["price_bars"] = len(bars)
+            except Exception as exc:  # noqa: BLE001
+                result["notes"].append(f"Yahoo price fetch failed for {symbol}: {exc}")
+
+            try:
+                news = client.fetch_yahoo_news(symbol, max_items=10)
+                store.insert_news_items(news)
+                result["news_items"] = len(news)
+            except Exception as exc:  # noqa: BLE001
+                result["notes"].append(f"News fetch failed for {symbol}: {exc}")
+
+            social_total = 0
+            for subreddit in ("stocks", "investing", "wallstreetbets"):
+                try:
+                    posts = client.fetch_reddit_posts(symbol, subreddit, max_items=10)
+                    store.insert_social_posts(posts)
+                    social_total += len(posts)
+                except Exception as exc:  # noqa: BLE001
+                    result["notes"].append(f"Social fetch failed in r/{subreddit}: {exc}")
+            result["social_posts"] = social_total
+
+            try:
+                filings = client.fetch_sec_filings(symbol, max_items=10)
+                store.insert_sec_filings(filings)
+                result["sec_filings"] = len(filings)
+            except Exception as exc:  # noqa: BLE001
+                result["notes"].append(f"SEC filing fetch failed for {symbol}: {exc}")
+        finally:
+            store.conn.close()
+
+        return result
+
+    @staticmethod
+    def _sentiment_label(score: Optional[float]) -> str:
+        if score is None:
+            return "n/a"
+        if score > 0:
+            return f"bullish ({score:.3f})"
+        if score < 0:
+            return f"bearish ({score:.3f})"
+        return f"neutral ({score:.3f})"
+
     def build_response(self, text: str) -> str:
         parsed = parse_imessage_command(text)
         if parsed.action == "help":
@@ -140,7 +242,16 @@ class PiBridgeService:
         symbol = parsed.symbol
         try:
             if parsed.action in {"analyze", "price"}:
+                on_demand_result: Optional[Dict[str, Any]] = None
+                attempted_on_demand = False
+                if parsed.action == "analyze" and symbol not in CORE_PRELOADED_SYMBOLS:
+                    on_demand_result = self._ingest_symbol_on_demand(symbol)
+                    attempted_on_demand = True
+
                 latest = self.get_latest_price(symbol)
+                if parsed.action == "analyze" and not latest and not attempted_on_demand:
+                    on_demand_result = self._ingest_symbol_on_demand(symbol)
+                    latest = self.get_latest_price(symbol)
                 if not latest:
                     return f"No price data available yet for {symbol}."
                 close, timestamp, provider = latest
@@ -151,12 +262,45 @@ class PiBridgeService:
                     )
 
                 sentiment = self.get_sentiment(symbol)
-                sentiment_text = "n/a" if sentiment is None else f"{sentiment:.3f}"
+                social_sentiment = self.get_social_sentiment(symbol)
                 headlines = self.get_latest_headlines(symbol)
-                headline_text = " | ".join(headlines) if headlines else "No recent headlines"
+                latest_two_closes = self.get_latest_two_closes(symbol)
+                pct_change_text = "n/a"
+                if len(latest_two_closes) == 2 and latest_two_closes[1] != 0:
+                    pct_change = ((latest_two_closes[0] - latest_two_closes[1]) / latest_two_closes[1]) * 100
+                    pct_change_text = f"{pct_change:+.2f}% vs prev close"
+
+                filing = self.get_latest_sec_filing(symbol)
+                filing_text = (
+                    f"{filing[0]} filed {filing[1] or 'date n/a'}"
+                    if filing
+                    else "No recent SEC filing in local DB"
+                )
+                headline_lines = (
+                    "\n".join(f"• {headline}" for headline in headlines)
+                    if headlines
+                    else "• No recent headlines"
+                )
+                source_line = "📦 Source: Preloaded Raspberry Pi data"
+                if on_demand_result is not None:
+                    source_line = (
+                        "⚡ Source: On-demand Raspberry Pi refresh "
+                        f"(prices={on_demand_result.get('price_bars', 0)}, "
+                        f"news={on_demand_result.get('news_items', 0)}, "
+                        f"social={on_demand_result.get('social_posts', 0)}, "
+                        f"filings={on_demand_result.get('sec_filings', 0)})"
+                    )
                 return (
-                    f"Analysis for {symbol}: latest close={close:.2f} ({provider}) at {timestamp}; "
-                    f"avg news sentiment={sentiment_text}; headlines={headline_text}"
+                    f"📊 {symbol} At-a-Glance\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"💵 Latest close: {close:.2f} ({provider})\n"
+                    f"🕒 Timestamp: {timestamp}\n"
+                    f"📈 Momentum: {pct_change_text}\n"
+                    f"🧠 News sentiment: {self._sentiment_label(sentiment)}\n"
+                    f"💬 Social sentiment: {self._sentiment_label(social_sentiment)}\n"
+                    f"🏛️ Financials: {filing_text}\n"
+                    f"📰 Headlines:\n{headline_lines}\n"
+                    f"{source_line}"
                 )
 
             if parsed.action == "news":
