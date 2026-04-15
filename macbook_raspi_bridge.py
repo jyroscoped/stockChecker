@@ -51,10 +51,26 @@ def parse_imessage_command(text: str) -> ParsedCommand:
 
 class PiBridgeService:
     def __init__(self, db_path: str):
-        self.db_path = db_path
+        self.db_path = os.path.abspath(os.path.expanduser(db_path))
+
+    def check_db_ready(self) -> None:
+        db_dir = os.path.dirname(self.db_path) or "."
+        if not os.path.isdir(db_dir):
+            raise sqlite3.OperationalError(f"database directory does not exist: {db_dir}")
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute("SELECT 1")
+        finally:
+            conn.close()
+
+    def _open_conn(self) -> sqlite3.Connection:
+        db_dir = os.path.dirname(self.db_path) or "."
+        if not os.path.isdir(db_dir):
+            raise sqlite3.OperationalError(f"database directory does not exist: {db_dir}")
+        return sqlite3.connect(self.db_path)
 
     def _query_one(self, sql: str, params: Tuple[Any, ...]) -> Optional[Tuple[Any, ...]]:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._open_conn()
         try:
             cur = conn.execute(sql, params)
             return cur.fetchone()
@@ -62,7 +78,7 @@ class PiBridgeService:
             conn.close()
 
     def _query_many(self, sql: str, params: Tuple[Any, ...]) -> list[Tuple[Any, ...]]:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._open_conn()
         try:
             cur = conn.execute(sql, params)
             return cur.fetchall()
@@ -121,37 +137,43 @@ class PiBridgeService:
             return "No ticker found. Try: Analyze $NVDA"
 
         symbol = parsed.symbol
-        if parsed.action in {"analyze", "price"}:
-            latest = self.get_latest_price(symbol)
-            if not latest:
-                return f"No price data available yet for {symbol}."
-            close, timestamp, provider = latest
-            if parsed.action == "price":
+        try:
+            if parsed.action in {"analyze", "price"}:
+                latest = self.get_latest_price(symbol)
+                if not latest:
+                    return f"No price data available yet for {symbol}."
+                close, timestamp, provider = latest
+                if parsed.action == "price":
+                    return (
+                        f"{symbol} latest close: {close:.2f} "
+                        f"(provider={provider}, timestamp={timestamp})"
+                    )
+
+                sentiment = self.get_sentiment(symbol)
+                sentiment_text = "n/a" if sentiment is None else f"{sentiment:.3f}"
+                headlines = self.get_latest_headlines(symbol)
+                headline_text = " | ".join(headlines) if headlines else "No recent headlines"
                 return (
-                    f"{symbol} latest close: {close:.2f} "
-                    f"(provider={provider}, timestamp={timestamp})"
+                    f"Analysis for {symbol}: latest close={close:.2f} ({provider}) at {timestamp}; "
+                    f"avg news sentiment={sentiment_text}; headlines={headline_text}"
                 )
 
-            sentiment = self.get_sentiment(symbol)
-            sentiment_text = "n/a" if sentiment is None else f"{sentiment:.3f}"
-            headlines = self.get_latest_headlines(symbol)
-            headline_text = " | ".join(headlines) if headlines else "No recent headlines"
+            if parsed.action == "news":
+                headlines = self.get_latest_headlines(symbol)
+                if not headlines:
+                    return f"No news data available yet for {symbol}."
+                return f"Latest {symbol} headlines: " + " | ".join(headlines)
+
+            if parsed.action == "sentiment":
+                sentiment = self.get_sentiment(symbol)
+                if sentiment is None:
+                    return f"No sentiment data available yet for {symbol}."
+                return f"{symbol} average news sentiment: {sentiment:.3f}"
+        except sqlite3.Error as exc:
             return (
-                f"Analysis for {symbol}: latest close={close:.2f} ({provider}) at {timestamp}; "
-                f"avg news sentiment={sentiment_text}; headlines={headline_text}"
+                f"Bridge database error: {exc}. "
+                f"Verify --db-path points to the Raspberry Pi SQLite file."
             )
-
-        if parsed.action == "news":
-            headlines = self.get_latest_headlines(symbol)
-            if not headlines:
-                return f"No news data available yet for {symbol}."
-            return f"Latest {symbol} headlines: " + " | ".join(headlines)
-
-        if parsed.action == "sentiment":
-            sentiment = self.get_sentiment(symbol)
-            if sentiment is None:
-                return f"No sentiment data available yet for {symbol}."
-            return f"{symbol} average news sentiment: {sentiment:.3f}"
 
         return "Unknown command. Use Help for supported commands."
 
@@ -223,9 +245,15 @@ def run_pi_server(host: str, port: int, db_path: str, token: str) -> int:
         raise SystemExit("BRIDGE_TOKEN or --token is required for serve-pi")
 
     PiBridgeHandler.service = PiBridgeService(db_path)
+    try:
+        PiBridgeHandler.service.check_db_ready()
+    except sqlite3.Error as exc:
+        raise SystemExit(
+            f"Unable to open bridge database at {PiBridgeHandler.service.db_path}: {exc}"
+        ) from exc
     PiBridgeHandler.token = token
     server = ThreadingHTTPServer((host, port), PiBridgeHandler)
-    print(f"Pi bridge listening on http://{host}:{port} (db={db_path})")
+    print(f"Pi bridge listening on http://{host}:{port} (db={PiBridgeHandler.service.db_path})")
     server.serve_forever()
     return 0
 
