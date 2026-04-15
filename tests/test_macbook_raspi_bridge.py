@@ -60,6 +60,14 @@ class BridgeServiceTests(unittest.TestCase):
             self.assertIn("latest close=108.50", output)
             self.assertIn("NVDA surges", output)
 
+    def test_build_response_handles_unopenable_db_path(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            db_path = os.path.join(tmp_dir, "missing_dir", "bridge.db")
+            service = PiBridgeService(db_path)
+            output = service.build_response("Price $NVDA")
+            self.assertIn("Bridge database error:", output)
+            self.assertIn("Verify --db-path", output)
+
 
 if __name__ == "__main__":
     unittest.main()

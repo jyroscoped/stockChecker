@@ -261,11 +261,36 @@ The script prints a JSON response like:
 
 ---
 
+### Step 4 — Mac auto-relay for incoming iCloud messages
+
+If you want your Mac to automatically relay new incoming iMessages from one iCloud sender to your Pi bridge, run:
+
+```bash
+# Use the SAME token you set on the Pi
+export BRIDGE_TOKEN="your_generated_token_here"
+
+python3 mac_icloud_relay.py \
+  --icloud-sender your_icloud_sender@example.com \
+  --pi-url http://raspberrypi.local:8787
+```
+
+Optional flags:
+
+- `--reply-to-imessage` to send the Pi response back to that iMessage sender
+- `--poll-seconds 2` to control polling frequency
+- `--process-existing` to process older messages at startup (default is new messages only)
+- `--messages-db-path ~/Library/Messages/chat.db` to override Messages DB location
+
+> **Important (macOS permissions):** this script reads `~/Library/Messages/chat.db`. If access fails, grant Full Disk Access to Terminal (or your shell app) in System Settings → Privacy & Security → Full Disk Access.
+
+---
+
 ### Quick reference — common errors
 
 | Error message | Cause | Fix |
 |---|---|---|
 | `BRIDGE_TOKEN or --token is required for serve-pi` | Token not set | Run `export BRIDGE_TOKEN="..."` before the command, or pass `--token "..."` |
+| `Unable to open bridge database ...` | Invalid `--db-path` or missing directory | Use an existing directory and point `--db-path` to the Pi SQLite file (example: `/home/pi/stockchecker_data.db`) |
 | `401 Unauthorized` | Token mismatch between Pi and Mac | Make sure both sides use the exact same string |
 | `Connection refused` | Pi server not running | Re-run the `serve-pi` command on the Pi |
 | `Could not resolve host raspberrypi.local` | mDNS not working | Replace `raspberrypi.local` with the Pi's IP address |
