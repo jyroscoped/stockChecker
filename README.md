@@ -227,6 +227,9 @@ Supported command text values (sent in POST body):
 - `Sentiment $TICKER`
 - `Help`
 
+`Analyze $TICKER` now returns a formatted at-a-glance response with section separators, emojis, price snapshot, momentum, sentiment, headlines, and latest SEC filing summary.  
+If the ticker is outside the core preloaded set (`NVDA`, `AAPL`, `SPY`, `VOO`, `MSFT`), the Pi bridge performs an on-demand local ingestion refresh for that ticker before returning the analysis.
+
 ---
 
 ### Step 3 — Mac side (client forwarder)
