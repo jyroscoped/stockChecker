@@ -12,6 +12,7 @@ import hmac
 import json
 import os
 import re
+import socket
 import sqlite3
 import urllib.error
 import urllib.request
@@ -259,6 +260,35 @@ def send_command_to_pi(
         raise ValueError(f"Pi bridge returned invalid JSON: {raw[:200]}") from exc
 
 
+def format_network_error(exc: urllib.error.URLError, pi_url: str) -> str:
+    command_url = pi_url.rstrip("/") + "/command"
+    if isinstance(exc, urllib.error.HTTPError):
+        if exc.code == 401:
+            return (
+                f"Network error: HTTP 401 Unauthorized from {command_url}. "
+                "Verify BRIDGE_TOKEN/--token matches on Mac and Pi."
+            )
+        return f"Network error: HTTP {exc.code} from {command_url}."
+
+    reason = getattr(exc, "reason", None)
+    if isinstance(reason, socket.gaierror):
+        return (
+            f"Network error: Could not resolve host for {command_url}. "
+            "Use the Pi IP address if local hostname resolution fails."
+        )
+    if isinstance(reason, TimeoutError) or isinstance(reason, socket.timeout):
+        return (
+            f"Network error: Request to {command_url} timed out. "
+            "Confirm the Pi bridge server is running and reachable."
+        )
+    if isinstance(reason, ConnectionRefusedError):
+        return (
+            f"Network error: Connection refused by {command_url}. "
+            "Start the Pi bridge server with `serve-pi`."
+        )
+    return f"Network error: {exc}"
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="MacBook/iOS to Raspberry Pi bridge")
     sub = parser.add_subparsers(dest="mode", required=True)
@@ -296,7 +326,7 @@ def main() -> int:
                 timeout=args.timeout,
             )
         except urllib.error.URLError as exc:
-            raise SystemExit(f"Network error: {exc}") from exc
+            raise SystemExit(format_network_error(exc, args.pi_url)) from exc
 
         print(json.dumps(response, indent=2))
         return 0
