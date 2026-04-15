@@ -43,9 +43,9 @@ def _latest_seen_rowid(conn: sqlite3.Connection, icloud_sender: str) -> int:
         """
         SELECT COALESCE(MAX(message.ROWID), 0)
         FROM message
-        JOIN handle ON handle.ROWID = message.handle_id
-        WHERE message.is_from_me = 0
-          AND handle.id = ?
+        JOIN chat_message_join cmj ON message.ROWID = cmj.message_id
+        JOIN chat ON cmj.chat_id = chat.ROWID
+        WHERE chat.chat_identifier = ?
         """,
         (icloud_sender,),
     ).fetchone()
@@ -80,17 +80,24 @@ def _fetch_new_incoming_texts(
 ) -> list[tuple[int, str]]:
     rows = conn.execute(
         """
-        SELECT message.ROWID, COALESCE(message.text, '')
+        SELECT 
+            message.ROWID,
+            COALESCE(message.text, ''),
+            message.is_from_me
         FROM message
-        JOIN handle ON handle.ROWID = message.handle_id
-        WHERE message.is_from_me = 0
-          AND handle.id = ?
+        JOIN chat_message_join cmj ON message.ROWID = cmj.message_id
+        JOIN chat ON cmj.chat_id = chat.ROWID
+        WHERE chat.chat_identifier = ?
           AND message.ROWID > ?
         ORDER BY message.ROWID ASC
         """,
         (icloud_sender, min_rowid_exclusive),
     ).fetchall()
-    return [(int(row[0]), str(row[1]).strip()) for row in rows]
+
+    return [
+        (int(row[0]), str(row[1]).strip())
+        for row in rows
+    ]
 
 
 def _build_parser() -> argparse.ArgumentParser:
