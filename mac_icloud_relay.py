@@ -114,7 +114,7 @@ def main() -> int:
     if not args.token:
         raise SystemExit("BRIDGE_TOKEN or --token is required")
     if args.poll_seconds <= 0:
-        raise SystemExit("--poll-seconds must be > 0")
+        raise SystemExit(f"--poll-seconds must be > 0, got {args.poll_seconds}")
 
     conn = _connect_messages_db(args.messages_db_path)
     try:
@@ -143,7 +143,12 @@ def main() -> int:
                 response_text: Optional[str] = None
                 if isinstance(response, dict):
                     raw = response.get("response_text")
-                    response_text = str(raw) if raw is not None else None
+                    if isinstance(raw, str):
+                        response_text = raw
+                    elif raw is None:
+                        response_text = None
+                    else:
+                        response_text = json.dumps(raw, ensure_ascii=False)
                 print(
                     json.dumps(
                         {
