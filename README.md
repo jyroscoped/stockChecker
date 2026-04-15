@@ -168,29 +168,58 @@ Arguments:
 
 ## MacBook/iOS ↔ Raspberry Pi Communication Script
 
-The communication bridge is in `macbook_raspi_bridge.py`.
+The communication bridge is in `macbook_raspi_bridge.py`. Both the Raspberry Pi (server) and your Mac (client) must share the same secret token so only your Mac can call the Pi's API.
 
-### Raspberry Pi side (server)
+---
 
-Run this on the Raspberry Pi to expose an authenticated endpoint that reads from the local SQLite data ingested by `raspberry_ingester.py`:
+### Step 1 — Generate a shared secret token (do this once)
+
+Run the following command on **either** machine (Pi or Mac) — it doesn't matter which. Copy the output; you'll paste it in the steps below.
 
 ```bash
-export BRIDGE_TOKEN="replace_with_long_random_token"
-python3 macbook_raspi_bridge.py serve-pi --host 0.0.0.0 --port 8787 --db-path /home/pi/stockchecker_data.db
+python3 -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-HTTP endpoints:
-
-- `GET /health`
-- `POST /command` (requires header `X-Bridge-Token`)
-
-Example command JSON payload:
-
-```json
-{"text":"Analyze $NVDA","sender":"ios"}
+Example output:
+```
+a3f8c2e1d4b7a09e5f3c2b1d4e7a8f0c1b2d3e4f5a6b7c8d9e0f1a2b3c4d5e6
 ```
 
-Supported commands:
+Keep this value — you need the **exact same string** on both the Pi and the Mac.
+
+---
+
+### Step 2 — Raspberry Pi side (server)
+
+SSH into your Pi and run:
+
+```bash
+# Paste your generated token here
+export BRIDGE_TOKEN="your_generated_token_here"
+
+python3 macbook_raspi_bridge.py serve-pi \
+  --host 0.0.0.0 \
+  --port 8787 \
+  --db-path /home/pi/stockchecker_data.db
+```
+
+You should see a message like `Serving on 0.0.0.0:8787`. Leave this terminal open.
+
+> **To make the token permanent** (so you don't have to re-export after reboots):
+> ```bash
+> echo 'export BRIDGE_TOKEN="your_generated_token_here"' >> ~/.bashrc
+> source ~/.bashrc
+> ```
+> Or add `BRIDGE_TOKEN=your_generated_token_here` to a `.env` file if you use one.
+
+HTTP endpoints exposed by the Pi server:
+
+| Endpoint | Method | Auth required |
+|----------|--------|---------------|
+| `/health` | GET | No |
+| `/command` | POST | Yes — header `X-Bridge-Token` |
+
+Supported command text values (sent in POST body):
 
 - `Analyze $TICKER`
 - `Price $TICKER`
@@ -198,16 +227,48 @@ Supported commands:
 - `Sentiment $TICKER`
 - `Help`
 
-### MacBook/BlueBubbles side (client forwarder)
+---
 
-Use this on the MacBook side to forward parsed iMessage text to the Raspberry Pi:
+### Step 3 — Mac side (client forwarder)
+
+Open a **new Terminal window on your Mac** and run:
 
 ```bash
-export BRIDGE_TOKEN="replace_with_same_token_used_on_pi"
-python3 macbook_raspi_bridge.py send-mac --pi-url http://raspberrypi.local:8787 --text "Analyze $NVDA" --sender "ios"
+# Use the SAME token you set on the Pi
+export BRIDGE_TOKEN="your_generated_token_here"
+
+python3 macbook_raspi_bridge.py send-mac \
+  --pi-url http://raspberrypi.local:8787 \
+  --text "Analyze $NVDA" \
+  --sender "ios"
 ```
 
-The script prints JSON containing `response_text`, which can be sent back through your BlueBubbles/iMessage responder flow.
+> **Tip:** Replace `raspberrypi.local` with your Pi's local IP address (e.g. `192.168.1.42`) if mDNS isn't resolving. Find it on the Pi with `hostname -I`.
+
+The script prints a JSON response like:
+```json
+{"response_text": "NVDA — $890.12  +1.4% ..."}
+```
+
+`response_text` is what you route back through your BlueBubbles/iMessage responder flow.
+
+> **To make the token permanent on Mac** (so you don't need to re-export):
+> ```bash
+> echo 'export BRIDGE_TOKEN="your_generated_token_here"' >> ~/.zshrc
+> source ~/.zshrc
+> ```
+> (Use `~/.bash_profile` instead if your Mac uses bash.)
+
+---
+
+### Quick reference — common errors
+
+| Error message | Cause | Fix |
+|---|---|---|
+| `BRIDGE_TOKEN or --token is required for serve-pi` | Token not set | Run `export BRIDGE_TOKEN="..."` before the command, or pass `--token "..."` |
+| `401 Unauthorized` | Token mismatch between Pi and Mac | Make sure both sides use the exact same string |
+| `Connection refused` | Pi server not running | Re-run the `serve-pi` command on the Pi |
+| `Could not resolve host raspberrypi.local` | mDNS not working | Replace `raspberrypi.local` with the Pi's IP address |
 
 ---
 
