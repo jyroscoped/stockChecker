@@ -16,6 +16,7 @@ from macbook_raspi_bridge import DEFAULT_REQUEST_TIMEOUT_SECONDS, send_command_t
 
 
 DEFAULT_MESSAGES_DB_PATH = "~/Library/Messages/chat.db"
+DEFAULT_PI_BRIDGE_URL = "http://raspberrypi.local:8787"
 
 
 def _normalized_messages_db_path(path: str) -> str:
@@ -63,7 +64,15 @@ on run argv
   end tell
 end run
 """
-    subprocess.run(["osascript", "-e", script, recipient, text], check=False)
+    completed = subprocess.run(
+        ["osascript", "-e", script, recipient, text],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        details = (completed.stderr or completed.stdout or "").strip()
+        print(f"Warning: failed to send iMessage reply to {recipient}: {details}")
 
 
 def _fetch_new_incoming_texts(
@@ -89,7 +98,7 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Relay new iMessage texts from a specific iCloud sender to Raspberry Pi."
     )
     parser.add_argument("--icloud-sender", required=True, help="Sender iCloud address to watch")
-    parser.add_argument("--pi-url", default=os.environ.get("PI_BRIDGE_URL", "http://raspberrypi.local:8787"))
+    parser.add_argument("--pi-url", default=os.environ.get("PI_BRIDGE_URL", DEFAULT_PI_BRIDGE_URL))
     parser.add_argument("--token", default=os.environ.get("BRIDGE_TOKEN", ""))
     parser.add_argument("--messages-db-path", default=DEFAULT_MESSAGES_DB_PATH)
     parser.add_argument("--poll-seconds", type=float, default=2.0)

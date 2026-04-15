@@ -53,10 +53,13 @@ class PiBridgeService:
     def __init__(self, db_path: str):
         self.db_path = os.path.abspath(os.path.expanduser(db_path))
 
-    def check_db_ready(self) -> None:
+    def _validate_db_directory(self) -> None:
         db_dir = os.path.dirname(self.db_path) or "."
         if not os.path.isdir(db_dir):
             raise sqlite3.OperationalError(f"database directory does not exist: {db_dir}")
+
+    def check_db_ready(self) -> None:
+        self._validate_db_directory()
         conn = sqlite3.connect(self.db_path)
         try:
             conn.execute("SELECT 1")
@@ -64,9 +67,7 @@ class PiBridgeService:
             conn.close()
 
     def _open_conn(self) -> sqlite3.Connection:
-        db_dir = os.path.dirname(self.db_path) or "."
-        if not os.path.isdir(db_dir):
-            raise sqlite3.OperationalError(f"database directory does not exist: {db_dir}")
+        self._validate_db_directory()
         return sqlite3.connect(self.db_path)
 
     def _query_one(self, sql: str, params: Tuple[Any, ...]) -> Optional[Tuple[Any, ...]]:
