@@ -189,14 +189,14 @@ class PiBridgeService:
                 store.insert_price_bars(bars)
                 result["price_bars"] = len(bars)
             except Exception as exc:  # noqa: BLE001
-                result["notes"].append(f"Yahoo price fetch failed: {exc}")
+                result["notes"].append(f"Yahoo price fetch failed for {symbol}: {exc}")
 
             try:
                 news = client.fetch_yahoo_news(symbol, max_items=10)
                 store.insert_news_items(news)
                 result["news_items"] = len(news)
             except Exception as exc:  # noqa: BLE001
-                result["notes"].append(f"News fetch failed: {exc}")
+                result["notes"].append(f"News fetch failed for {symbol}: {exc}")
 
             social_total = 0
             for subreddit in ("stocks", "investing", "wallstreetbets"):
@@ -213,7 +213,7 @@ class PiBridgeService:
                 store.insert_sec_filings(filings)
                 result["sec_filings"] = len(filings)
             except Exception as exc:  # noqa: BLE001
-                result["notes"].append(f"SEC filing fetch failed: {exc}")
+                result["notes"].append(f"SEC filing fetch failed for {symbol}: {exc}")
         finally:
             store.conn.close()
 
@@ -243,11 +243,13 @@ class PiBridgeService:
         try:
             if parsed.action in {"analyze", "price"}:
                 on_demand_result: Optional[Dict[str, Any]] = None
+                attempted_on_demand = False
                 if parsed.action == "analyze" and symbol not in CORE_PRELOADED_SYMBOLS:
                     on_demand_result = self._ingest_symbol_on_demand(symbol)
+                    attempted_on_demand = True
 
                 latest = self.get_latest_price(symbol)
-                if parsed.action == "analyze" and not latest:
+                if parsed.action == "analyze" and not latest and not attempted_on_demand:
                     on_demand_result = self._ingest_symbol_on_demand(symbol)
                     latest = self.get_latest_price(symbol)
                 if not latest:
@@ -264,7 +266,7 @@ class PiBridgeService:
                 headlines = self.get_latest_headlines(symbol)
                 latest_two_closes = self.get_latest_two_closes(symbol)
                 pct_change_text = "n/a"
-                if len(latest_two_closes) == 2 and latest_two_closes[1]:
+                if len(latest_two_closes) == 2 and latest_two_closes[1] != 0:
                     pct_change = ((latest_two_closes[0] - latest_two_closes[1]) / latest_two_closes[1]) * 100
                     pct_change_text = f"{pct_change:+.2f}% vs prev close"
 
